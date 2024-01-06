@@ -52,7 +52,7 @@ inline static int VTKTagPlanar(const int n_vertices) {
 }
 
 void VTUWriter::write_point_data(std::ostream &os) {
-  if (current_scalar_point_data_.empty() && current_vector_point_data_.empty())
+  if (current_scalar_point_data_.empty() && current_vector_point_data_.empty() && current_tensor_point_data_.empty())
     return;
 
   os << "<PointData ";
@@ -60,6 +60,8 @@ void VTUWriter::write_point_data(std::ostream &os) {
     os << "Scalars=\"" << current_scalar_point_data_ << "\" ";
   if (!current_vector_point_data_.empty())
     os << "Vectors=\"" << current_vector_point_data_ << "\" ";
+  if (!current_tensor_point_data_.empty())
+    os << "Tensors=\"" << current_tensor_point_data_ << "\" ";
   os << ">\n";
 
   for (auto it = point_data_.begin(); it != point_data_.end(); ++it) {
@@ -164,8 +166,78 @@ void VTUWriter::write_cells(const int n_vertices, const vector<int> &tets,
   os << "</Cells>\n";
 }
 
+void VTUWriter::write_cells(const vector<int> n_vertices, const vector<int> &tets,
+                            std::ostream &os, bool is_volume_mesh) {
+  //const int n_cells = tets.size() / n_vertices;
+  const int n_cells = n_vertices.size();
+  os << "<Cells>\n";
+  /////////////////////////////////////////////////////////////////////////////
+  // List vertex id's i=0, ..., n_vertices associated with each cell c
+  os << "<DataArray type=\"Int64\" Name=\"connectivity\" "
+        "format=\"ascii\">\n";
+  int idx = 0;
+  for (int c = 0; c < n_cells; ++c) {
+    for (int i = 0; i < n_vertices[c]; ++i) {
+      //int idx = index(n_vertices, c, i);
+      const int v_index = tets.at(idx);
+      idx+=1;
+      os << v_index;
+      if (i < n_vertices[c] - 1) {
+        os << " ";
+      }
+    }
+    os << "\n";
+  }
+
+  os << "</DataArray>\n";
+  /////////////////////////////////////////////////////////////////////////////
+  // List the VTK cell type for each mesh element.
+  // This assumes a uniform cell type the entire mesh; to generalize, pass
+  // or compute the number of vertices per cell and recompute the cell type
+  int min_cell_type=100;
+  int max_cell_type=0;
+  int cell_type;
+  for (int c = 0; c < n_cells; ++c) {
+    cell_type = is_volume_mesh ? VTKTagVolume(n_vertices[c]) : VTKTagPlanar(n_vertices[c]);
+    if(cell_type<min_cell_type) min_cell_type = cell_type;
+    if(cell_type>max_cell_type) max_cell_type = cell_type;
+  }
+  
+  os << "<DataArray type=\"Int8\" Name=\"types\" format=\"ascii\" "
+        "RangeMin=\""
+     << min_cell_type << "\" RangeMax=\"" << max_cell_type << "\">\n";
+  for (int i = 0; i < n_cells; ++i) {
+    cell_type = is_volume_mesh ? VTKTagVolume(n_vertices[i]) : VTKTagPlanar(n_vertices[i]);
+    os << cell_type << "\n";
+  }
+  os << "</DataArray>\n";
+
+  /////////////////////////////////////////////////////////////////////////////
+  // List offsets to access the vertex indices of the ith cell. Non-trivial
+  // if the mesh is a general polyognal mesh.
+  int sum_vertices = 0;
+  for (int i = 0; i < n_cells; ++i) {
+    sum_vertices += n_vertices[i];
+  }
+  os << "<DataArray type=\"Int64\" Name=\"offsets\" format=\"ascii\" "
+        "RangeMin=\""
+     << n_vertices[0] << "\" RangeMax=\"" << sum_vertices << "\">\n";
+
+  int acc = 0;
+  for (int i = 0; i < n_cells; ++i) {
+    acc += n_vertices[i];
+    os << acc << "\n";
+  }
+  
+  assert(acc == tets.size());
+
+  os << "</DataArray>\n";
+  /////////////////////////////////////////////////////////////////////////////
+  os << "</Cells>\n";
+}
+
 void VTUWriter::write_cell_data(std::ostream &os) {
-  if (current_scalar_cell_data_.empty() && current_vector_cell_data_.empty())
+  if (current_scalar_cell_data_.empty() && current_vector_cell_data_.empty() && current_tensor_cell_data_.empty())
     return;
 
   os << "<CellData ";
@@ -173,6 +245,8 @@ void VTUWriter::write_cell_data(std::ostream &os) {
     os << "Scalars=\"" << current_scalar_cell_data_ << "\" ";
   if (!current_vector_cell_data_.empty())
     os << "Vectors=\"" << current_vector_cell_data_ << "\" ";
+  if (!current_tensor_cell_data_.empty())
+    os << "Tensors=\"" << current_tensor_cell_data_ << "\" ";
   os << ">\n";
 
   for (auto it = cell_data_.begin(); it != cell_data_.end(); ++it) {
@@ -197,6 +271,8 @@ void VTUWriter::add_field(const std::string &name, const vector<double> &data,
 
   if (dimension == 1)
     add_scalar_field(name, tmp);
+  if (dimension == 5 || dimension == 9)
+    add_tensor_field(name,tmp,dimension);
   else
     add_vector_field(name, tmp, dimension);
 }
@@ -217,6 +293,15 @@ void VTUWriter::add_vector_field(const std::string &name,
   current_vector_point_data_ = name;
 }
 
+void VTUWriter::add_tensor_field(const std::string &name,
+                                 const vector<double> &data,
+                                 const int &dimension) {
+  point_data_.push_back(VTKDataNode<double>());
+
+  point_data_.back().initialize(name, "Float64", data, dimension);
+  current_tensor_point_data_ = name;
+}
+
 void VTUWriter::add_cell_scalar_field(const std::string &name,
                                  const vector<double> &data) {
   cell_data_.push_back(VTKDataNode<double>());
@@ -233,6 +318,15 @@ void VTUWriter::add_cell_vector_field(const std::string &name,
   current_vector_cell_data_ = name;
 }
 
+void VTUWriter::add_cell_tensor_field(const std::string &name,
+                                 const vector<double> &data,
+                                 const int &dimension) {
+  cell_data_.push_back(VTKDataNode<double>());
+
+  cell_data_.back().initialize(name, "Float64", data, dimension);
+  current_tensor_cell_data_ = name;
+}
+
 void VTUWriter::add_cell_field(const std::string &name, const vector<double> &data,
                           const int &dimension) {
   using std::abs;
@@ -244,6 +338,8 @@ void VTUWriter::add_cell_field(const std::string &name, const vector<double> &da
 
   if (dimension == 1)
     add_cell_scalar_field(name, tmp);
+  if (dimension == 5 || dimension == 9)
+    add_cell_tensor_field(name, tmp, dimension);
   else
     add_cell_vector_field(name, tmp, dimension);
 }
@@ -266,6 +362,29 @@ bool VTUWriter::write_mesh(std::ostream &os, const int dim, const int cell_size,
   return true;
 }
 
+bool VTUWriter::write_mesh(std::ostream &os, const int dim, const vector<int> cell_size,
+              const vector<double> &points, const vector<int> &tets, bool is_volume_mesh){
+  assert(dim > 1);
+  int min_cell_size = 100;
+  for (int i = 0; i < cell_size.size(); ++i) {
+    if(min_cell_size>cell_size[i]) min_cell_size = cell_size[i];
+  }
+  assert(min_cell_size > 1);
+
+  int num_points = points.size() / dim;
+  int num_cells = cell_size.size();  
+  
+  write_header(num_points, num_cells, os);
+  write_points(num_points, points, os, is_volume_mesh);
+  write_point_data(os);
+  write_cells(cell_size, tets, os, is_volume_mesh);
+  write_cell_data(os);
+  write_footer(os);
+  clear();
+  return true;
+}
+
+
 bool VTUWriter::write_mesh(const std::string &path, const int dim, const int cell_size,
               const vector<double> &points, const vector<int> &tets, bool is_volume_mesh){
 
@@ -283,8 +402,33 @@ bool VTUWriter::write_mesh(const std::string &path, const int dim, const int cel
   return true;
 }
 
+bool VTUWriter::write_mesh(const std::string &path, const int dim, const vector<int> cell_size,
+              const vector<double> &points, const vector<int> &tets, bool is_volume_mesh){
+
+
+  std::ofstream os;
+  os.open(path.c_str());
+  if (!os.good()) {
+    os.close();
+    return false;
+  }
+  os.setf(std::ios::scientific);
+  write_mesh(os, dim, cell_size, points, tets, is_volume_mesh);
+
+  os.close();
+  return true;
+}
+
 bool VTUWriter::write_surface_mesh(const std::string &path, const int dim,
                                    const int cell_size,
+                                   const vector<double> &points,
+                                   const vector<int> &tets) {
+  
+    return write_mesh(path, dim, cell_size, points, tets, false);
+}
+
+bool VTUWriter::write_surface_mesh(const std::string &path, const int dim,
+                                   const vector<int> cell_size,
                                    const vector<double> &points,
                                    const vector<int> &tets) {
   
@@ -299,6 +443,14 @@ bool VTUWriter::write_volume_mesh(const std::string &path, const int dim,
     return write_mesh(path, dim, cell_size, points, tets, true);
 }
 
+bool VTUWriter::write_volume_mesh(const std::string &path, const int dim,
+                                  const vector<int> cell_size,
+                                  const vector<double> &points,
+                                  const vector<int> &tets) {
+  
+    return write_mesh(path, dim, cell_size, points, tets, true);
+}
+
 bool VTUWriter::write_surface_mesh(std::ostream &os, const int dim,
                                    const int cell_size,
                                    const vector<double> &points,
@@ -307,8 +459,24 @@ bool VTUWriter::write_surface_mesh(std::ostream &os, const int dim,
     return write_mesh(os, dim, cell_size, points, tets, false);
 }
 
+bool VTUWriter::write_surface_mesh(std::ostream &os, const int dim,
+                                   const vector<int> cell_size,
+                                   const vector<double> &points,
+                                   const vector<int> &tets) {
+  
+    return write_mesh(os, dim, cell_size, points, tets, false);
+}
+
 bool VTUWriter::write_volume_mesh(std::ostream &os, const int dim,
                                   const int cell_size,
+                                  const vector<double> &points,
+                                  const vector<int> &tets) {
+  
+    return write_mesh(os, dim, cell_size, points, tets, true);
+}
+
+bool VTUWriter::write_volume_mesh(std::ostream &os, const int dim,
+                                  const vector<int> cell_size,
                                   const vector<double> &points,
                                   const vector<int> &tets) {
   
